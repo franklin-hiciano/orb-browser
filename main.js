@@ -1,51 +1,52 @@
-// main.js
+// main.js (ESM)
 import { app, BrowserWindow, ipcMain, webContents } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-let win;
-let pageWCid = null;
-ipcMain.handle("register-page", (_e, id) => {
-  pageWCid = id;
-  return true;
-});
 
-// OS passthrough: ignore mouse when *outside* the orbs
-ipcMain.on("set-ignore", (e, ignore) => {
-  const bw = BrowserWindow.fromWebContents(e.sender); // <-- get the right window
-  if (!bw || bw.isDestroyed()) return;
-  bw.setIgnoreMouseEvents(Boolean(ignore), { forward: true });
-});
-app.commandLine.appendSwitch("enable-transparent-visuals"); // Linux
-process.env.ELECTRON_OZONE_PLATFORM_HINT ||= "x11"; // or run with --ozone-platform-hint=x11
-app.whenReady().then(() => {
-  const win = new BrowserWindow({
+let win, pageWC;
+
+function createWindow() {
+  win = new BrowserWindow({
+    width: 1280,
+    height: 800,
+    transparent: true,
+    frame: false,
+    backgroundColor: "#00000000",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
-      webviewTag: true, // ← add this
+      backgroundThrottling: false,
+      webviewTag: true, // <-- REQUIRED
     },
   });
-
+  win.setIgnoreMouseEvents(false, { forward: true });
   win.loadFile("index.html");
+}
+
+app.whenReady().then(createWindow);
+
+ipcMain.on("orb:register", (_evt, id) => {
+  pageWC = webContents.fromId(id);
+  console.log("registered webview wc id:", id);
 });
 
-ipcMain.handle("capture-page", async () => {
-  if (!pageWCid) return { ok: false };
-  const wc = webContents.fromId(pageWCid);
-  const img = await wc.capturePage();
-  const png = img.toPNG();
-  const { width: w, height: h } = img.getSize();
-  return { ok: true, png, w, h };
+ipcMain.on("orb:ignore", (_evt, ignore) => {
+  if (win) win.setIgnoreMouseEvents(!!ignore, { forward: true });
 });
 
-ipcMain.handle("forward-input", (_, ev) => {
-  if (!pageWCid) return;
-  webContents.fromId(pageWCid).sendInputEvent(ev);
+ipcMain.on("orb:input", (_evt, ev) => {
+  if (pageWC && !pageWC.isDestroyed()) pageWC.sendInputEvent(ev);
 });
 
-// main.js
-// then toggle to false via IPC while cursor is inside an orb.
+ipcMain.handle("orb:capture", async () => {
+  if (!pageWC || pageWC.isDestroyed()) return { ok: false, why: "no-pageWC" };
+  const img = await pageWC.capturePage(); // no rect; grab visible
+  const { width: dipW, height: dipH } = img.getSize(); // DIP size
+  const dpr = await pageWC.executeJavaScript("window.devicePixelRatio||1");
+  const w = Math.round(dipW * dpr),
+    h = Math.round(dipH * dpr);
+  return { ok: w > 8 && h > 8, w, h, png: img.toPNG() };
+});

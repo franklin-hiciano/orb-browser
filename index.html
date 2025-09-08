@@ -56,481 +56,605 @@
     <div>-/= feather · B toggle 2nd drop</div>
 </div>
 
-<div id="pageWrap" style="position:fixed; inset:0; pointer-events:none; z-index:0">
-  <webview id="page" style="position:absolute; inset:0; opacity:0.001; pointer-events:none"></webview>
+<div
+    id="pageWrap"
+    style="position: fixed; inset: 0; pointer-events: none; z-index: 0"
+>
+    <webview
+        id="page"
+        style="position: absolute; inset: 0; opacity: 0.2; pointer-events: none"
+    ></webview>
 </div>
 
-<canvas id="gl" style="position:fixed; inset:0; z-index:1"></canvas>
+<canvas id="gl" style="position: fixed; inset: 0; z-index: 1"></canvas>
 
-    <script>
-        const dpr = Math.max(1, window.devicePixelRatio || 1);
-        // index.html renderer
-        const page = document.getElementById("page");
-        const nav = document.getElementById("nav"),
-            url = document.getElementById("url");
-        page.src = url.value; // now safe
-        const wv = page;
-        page.addEventListener("dom-ready", () => {
-            window.orbAPI.registerPage(page.getWebContentsId());
-        });
-        page.addEventListener("did-finish-load", () => {
-            grab();
-        }); // first snapshot
-        page.addEventListener("did-fail-load", (e) => {
-            if (e.errorCode !== -3)
-                console.error("webview load failed:", e.errorCode, e.validatedURL);
-        });
+<script>
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    // index.html renderer
+    const page = document.getElementById("page");
+    const nav = document.getElementById("nav"),
+        url = document.getElementById("url");
+    page.src = url.value; // now safe
+    const wv = page;
+    page.addEventListener("dom-ready", () => {
+        window.orbAPI.registerPage(page.getWebContentsId());
+    });
+    page.addEventListener("did-finish-load", () => {
+        grab();
+    }); // first snapshot
+    page.addEventListener("did-fail-load", (e) => {
+        if (e.errorCode !== -3)
+            console.error("webview load failed:", e.errorCode, e.validatedURL);
+    });
 
-        nav.addEventListener("submit", (e) => {
-            e.preventDefault();
-            page.loadURL(url.value);
-        });
+    nav.addEventListener("submit", (e) => {
+        e.preventDefault();
+        page.loadURL(url.value);
+    });
 
-        // index.html (renderer script) — after you grab #page:
-        let zoom = 1;
+    // index.html (renderer script) — after you grab #page:
+    let zoom = 1;
 
-        // keep zoom in sync
+    // keep zoom in sync
 
-        function sendToWebview(type, e){
-          const r = canvas.getBoundingClientRect();
-          const x = e.clientX - r.left;
-          const y = e.clientY - r.top;
+    function sendToWebview(type, e) {
+        const r = canvas.getBoundingClientRect();
+        const x = e.clientX - r.left;
+        const y = e.clientY - r.top;
 
-          const btn = e.button === 2 ? "right" : e.button === 1 ? "middle" : "left";
-          const ev = type==="down" ? {type:"mouseDown", x, y, button:btn, clickCount:1}
-            : type==="up"   ? {type:"mouseUp",   x, y, button:btn, clickCount:1}
-            : type==="move" ? {type:"mouseMove", x, y, movementX:e.movementX, movementY:e.movementY}
-            :                 {type:"mouseWheel",x, y, deltaX:e.deltaX, deltaY:e.deltaY, canScroll:true, hasPreciseScrollingDeltas:true};
-          window.orbAPI?.forwardInput(ev);
-        }
+        const btn =
+            e.button === 2 ? "right" : e.button === 1 ? "middle" : "left";
+        const ev =
+            type === "down"
+                ? { type: "mouseDown", x, y, button: btn, clickCount: 1 }
+                : type === "up"
+                  ? { type: "mouseUp", x, y, button: btn, clickCount: 1 }
+                  : type === "move"
+                    ? {
+                          type: "mouseMove",
+                          x,
+                          y,
+                          movementX: e.movementX,
+                          movementY: e.movementY,
+                      }
+                    : {
+                          type: "mouseWheel",
+                          x,
+                          y,
+                          deltaX: e.deltaX,
+                          deltaY: e.deltaY,
+                          canScroll: true,
+                          hasPreciseScrollingDeltas: true,
+                      };
+        window.orbAPI?.forwardInput(ev);
+    }
 
+    const canvas = document.getElementById("gl");
+    const gl = canvas.getContext("webgl2", {
+        antialias: true,
+        premultipliedAlpha: true,
+        alpha: true,
+    });
 
-        const canvas = document.getElementById("gl");
-        const gl = canvas.getContext("webgl2", {
-            antialias: true,
-            premultipliedAlpha: true,
-            alpha: true,
-        });
+    if (!gl) {
+        alert("WebGL2 required");
+    }
+    // premultipliedAlpha:true was already set; clear fully transparent
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
 
-        if (!gl) {
-            alert("WebGL2 required");
-        }
-        // premultipliedAlpha:true was already set; clear fully transparent
-        gl.clearColor(0, 0, 0, 0);
-        gl.clear(gl.COLOR_BUFFER_BIT);
+    function updateIgnore(xDev, yDev) {
+        const kR = Math.max(1, K * Math.max(A.R, B.R));
+        const dA = Math.hypot(xDev - A.cx, yDev - A.cy) - A.R;
+        const dB = Math.hypot(xDev - B.cx, yDev - B.cy) - B.R;
+        const d = useB ? smin(dA, dB, kR) : dA;
+        window.orbAPI.setIgnore(d > 0); // OS passthrough when outside
+    }
 
-        function updateIgnore(xDev, yDev) {
-            const kR = Math.max(1, K * Math.max(A.R, B.R));
-            const dA = Math.hypot(xDev - A.cx, yDev - A.cy) - A.R;
-            const dB = Math.hypot(xDev - B.cx, yDev - B.cy) - B.R;
-            const d = useB ? smin(dA, dB, kR) : dA;
-            window.orbAPI.setIgnore(d > 0); // OS passthrough when outside
-        }
+    const vs = `#version 300 es
+    in vec2 a; void main(){gl_Position=vec4(a,0.,1.);} `;
+    const fs = `#version 300 es
+    precision highp float; out vec4 o;
+    uniform sampler2D uTex; uniform vec2 uRes; uniform vec2 uTexSize;
+    uniform vec4 uDropA, uDropB; uniform int uUseB; uniform float uIOR, uFeather, uK;
+    vec3 sampleImageAtPx(vec2 px){
+      vec2 uv = px / uTexSize; uv.y = 1. - uv.y; uv = clamp(uv,0.,1.); // flip Y
+      return texture(uTex, uv).rgb;
+    }
+    vec3 sky(vec3 d){ d=normalize(d); float up=clamp(d.z*.5+.5,0.,1.);
+      return mix(vec3(.12,.16,.26), vec3(.55,.66,.92), up); }
+    bool refractSafe(vec3 I, vec3 N, float etaI, float etaT, out vec3 T){
+      float eta=etaI/etaT, c=clamp(dot(-I,N),-1.,1.), k=1.-eta*eta*(1.-c*c);
+      if(k<0.){T=vec3(0);return false;} T=normalize(eta*I+(eta*c-sqrt(k))*N); return true;
+    }
+    vec3 cap_h_grad(vec2 px, vec4 d){ // (h, ∇h)
+      vec2 v = px - d.xy; float r=length(v), R=d.z, H=d.w;
+      if(r>=R||R<1e-6||H<=0.) return vec3(0.);
+      float t=r/R, s2=max(1e-6,1.-t*t); float h = H*(1.-sqrt(s2));
+      float dhdr = H*t/(R*sqrt(s2));
+      vec2 g = (r<1e-5)? vec2(0): (dhdr/r)*v;
+      return vec3(h,g);
+    }
+    float smin(float a,float b,float k,out float t){
+      t = clamp(0.5+0.5*(b-a)/k,0.,1.); return mix(b,a,t)-k*t*(1.-t);
+    }
+    struct HN{float h; vec2 g;};
+    HN combine(vec2 px, vec4 A, vec4 B, float kR, int useB){
+      if(useB==0){ vec3 a=cap_h_grad(px,A); return HN(a.x,a.yz); }
+      float fA = length(px-A.xy)-A.z, fB = length(px-B.xy)-B.z; float t;
+      float d = smin(fA,fB,kR,t); if(d>0.) return HN(0.,vec2(0));
+      vec3 a=cap_h_grad(px,A), b=cap_h_grad(px,B);
+      return HN(mix(b.x,a.x,t), mix(b.yz,a.yz,t));
+    }
+    float fresnel(float c,float ei,float et){ float R0=(ei-et)/(ei+et); R0*=R0; return R0+(1.-R0)*pow(1.-c,5.); }
 
-        const vs = `#version 300 es
-        in vec2 a; void main(){gl_Position=vec4(a,0.,1.);} `;
-        const fs = `#version 300 es
-        precision highp float; out vec4 o;
-        uniform sampler2D uTex; uniform vec2 uRes; uniform vec2 uTexSize;
-        uniform vec4 uDropA, uDropB; uniform int uUseB; uniform float uIOR, uFeather, uK;
-        vec3 sampleImageAtPx(vec2 px){
-          vec2 uv = px / uTexSize; uv.y = 1. - uv.y; uv = clamp(uv,0.,1.); // flip Y
-          return texture(uTex, uv).rgb;
-        }
-        vec3 sky(vec3 d){ d=normalize(d); float up=clamp(d.z*.5+.5,0.,1.);
-          return mix(vec3(.12,.16,.26), vec3(.55,.66,.92), up); }
-        bool refractSafe(vec3 I, vec3 N, float etaI, float etaT, out vec3 T){
-          float eta=etaI/etaT, c=clamp(dot(-I,N),-1.,1.), k=1.-eta*eta*(1.-c*c);
-          if(k<0.){T=vec3(0);return false;} T=normalize(eta*I+(eta*c-sqrt(k))*N); return true;
-        }
-        vec3 cap_h_grad(vec2 px, vec4 d){ // (h, ∇h)
-          vec2 v = px - d.xy; float r=length(v), R=d.z, H=d.w;
-          if(r>=R||R<1e-6||H<=0.) return vec3(0.);
-          float t=r/R, s2=max(1e-6,1.-t*t); float h = H*(1.-sqrt(s2));
-          float dhdr = H*t/(R*sqrt(s2));
-          vec2 g = (r<1e-5)? vec2(0): (dhdr/r)*v;
-          return vec3(h,g);
-        }
-        float smin(float a,float b,float k,out float t){
-          t = clamp(0.5+0.5*(b-a)/k,0.,1.); return mix(b,a,t)-k*t*(1.-t);
-        }
-        struct HN{float h; vec2 g;};
-        HN combine(vec2 px, vec4 A, vec4 B, float kR, int useB){
-          if(useB==0){ vec3 a=cap_h_grad(px,A); return HN(a.x,a.yz); }
-          float fA = length(px-A.xy)-A.z, fB = length(px-B.xy)-B.z; float t;
-          float d = smin(fA,fB,kR,t); if(d>0.) return HN(0.,vec2(0));
-          vec3 a=cap_h_grad(px,A), b=cap_h_grad(px,B);
-          return HN(mix(b.x,a.x,t), mix(b.yz,a.yz,t));
-        }
-        float fresnel(float c,float ei,float et){ float R0=(ei-et)/(ei+et); R0*=R0; return R0+(1.-R0)*pow(1.-c,5.); }
-
-        void main(){
-          vec2 px = gl_FragCoord.xy; vec2 res=uRes;
-          float kR = max(1., uK * max(uDropA.z, uDropB.z)); // smoothing in px
-          HN S = combine(px, uDropA, uDropB, kR, uUseB);
-          float h = max(S.h, 0.);
-          // mask (signed distance) for feathering
-          float tDummy; float d = (uUseB==1)
-            ? smin(length(px-uDropA.xy)-uDropA.z, length(px-uDropB.xy)-uDropB.z, kR, tDummy)
-            : length(px-uDropA.xy)-uDropA.z;
-
-
-          // REMOVE this early block (it’s before R/F/T1 exist):
-          // bool texReady = ...
-          // vec3 baseR = sky(R);
-          // vec3 refrCol = texReady ? sampleImageAtPx(px + T1.xy * tBot) : baseR;
-          // vec3 lensCol = mix(refrCol, baseR, F);
-
-          // KEEP one block at the end, in this order:
-          vec2 g2 = S.g; vec3 N = normalize(vec3(-g2, 1.));
-          vec3 I = vec3(0,0,-1); if(dot(I,N)>0.) N = -N;
-          vec3 R = reflect(I,N); float F = fresnel(max(0., dot(-I,N)), 1., uIOR);
-          vec3 T1; bool ok = refractSafe(I,N,1.,uIOR,T1);
-          float denom = min(-1e-6, T1.z);
-          float tBot  = clamp(-h/denom, 0., 8.*max(1.,h));
-          bool texReady = (uTexSize.x > 8. && uTexSize.y > 8.);
-          vec3 refrCol = texReady ? sampleImageAtPx(px + T1.xy*tBot) : sky(R);
-          vec3 lensCol = mix(refrCol, sky(R), F);
-
-          float soft = smoothstep(0., uFeather, -d);
-          float thickness = clamp(h / max(max(uDropA.w, uDropB.w), 1e-6), 0., 1.);
-          float w = clamp(soft * (0.4 + 0.6*thickness), 0., 1.);
-          vec3 outCol = mix(vec3(0.), lensCol, w);
-          o = vec4(outCol, w);
-                           // alpha = w (premultiplied by browser)
-
-        }`;
-        function sh(t, s) {
-            const o = gl.createShader(t);
-            gl.shaderSource(o, s);
-            gl.compileShader(o);
-            if (!gl.getShaderParameter(o, gl.COMPILE_STATUS))
-                throw gl.getShaderInfoLog(o);
-            return o;
-        }
-        const prog = gl.createProgram();
-        gl.attachShader(prog, sh(gl.VERTEX_SHADER, vs));
-        gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, fs));
-        gl.linkProgram(prog);
-        if (!gl.getProgramParameter(prog, gl.LINK_STATUS))
-            throw gl.getProgramInfoLog(prog);
-        gl.useProgram(prog);
-        const buf = gl.createBuffer();
-        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-        gl.bufferData(
-            gl.ARRAY_BUFFER,
-            new Float32Array([-1, -1, 1, -1, -1, 1, 1, -1, 1, 1, -1, 1]),
-            gl.STATIC_DRAW,
-        );
-        const loc = gl.getAttribLocation(prog, "a");
-        gl.enableVertexAttribArray(loc);
-        gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-
-        // uniforms
-        const uRes = gl.getUniformLocation(prog, "uRes");
-        const uTex = gl.getUniformLocation(prog, "uTex");
-        const uTexSize = gl.getUniformLocation(prog, "uTexSize");
-        const uDropA = gl.getUniformLocation(prog, "uDropA");
-        const uDropB = gl.getUniformLocation(prog, "uDropB");
-        const uUseB = gl.getUniformLocation(prog, "uUseB");
-        const uIOR = gl.getUniformLocation(prog, "uIOR");
-        const uFeather = gl.getUniformLocation(prog, "uFeather");
-        const uK = gl.getUniformLocation(prog, "uK");
-
-        // texture
-        const tex = gl.createTexture();
-        gl.bindTexture(gl.TEXTURE_2D, tex);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-        gl.uniform1i(uTex, 0);
-
-        page.addEventListener("did-finish-load", () => {
-            grab();
-        }); // first bitmap
-
-        let texW = 2,
-            texH = 2;
-        // state
-        const A = { cx: 600, cy: 400, R: 180, H: 120 },
-            B = { cx: 860, cy: 420, R: 160, H: 110 };
-        let useB = true,
-            IOR = 1.333,
-            feather = 16,
-            K = 0.08;
-
-        // capture loop (throttled ~30fps)
-        let lastCap = 0,
-            capBusy = false;
-        async function grab() {
-            if (capBusy) return;
-            capBusy = true;
-            const r = await window.orbAPI.capturePage();
-            if (r && r.ok) {
-                const bmp = await createImageBitmap(new Blob([r.png]));
-                texW = r.w;
-                texH = r.h;
-                gl.bindTexture(gl.TEXTURE_2D, tex);
-                gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bmp);
-
-            }
-            capBusy = false;
-        }
-        const wrap = document.getElementById('pageWrap');
-        function updateMask(){
-          // map GL px -> CSS px
-          const cssW = innerWidth, cssH = innerHeight;
-          const sx = cssW / canvas.width, sy = cssH / canvas.height;
-
-          const ax = A.cx * sx, ay = A.cy * sy, ar = A.R * sx;
-          const bx = B.cx * sx, by = B.cy * sy, br = B.R * sx;
-          const f  = feather * sx;
-
-          // White (=visible) inside each orb, fade to transparent over feather
-          const gA = `radial-gradient(circle ${ar}px at ${ax}px ${ay}px, #fff 0 ${ar}px, #0000 ${ar+f}px)`;
-          const gB = `radial-gradient(circle ${br}px at ${bx}px ${by}px, #fff 0 ${br}px, #0000 ${br+f}px)`;
-
-          // Standard + webkit masks; use additive compose so both circles show
-          wrap.style.maskImage = `${gA}, ${gB}`;
-          wrap.style.maskComposite = 'add, add';
-          wrap.style.webkitMaskImage = `${gA}, ${gB}`;
-          wrap.style.webkitMaskComposite = 'source-over, source-over'; // Chrome additive
-          wrap.style.maskRepeat = wrap.style.webkitMaskRepeat = 'no-repeat, no-repeat';
-        }
-
-        // keep the mask in sync
-        addEventListener('resize', updateMask);
-        (function raf(){
-          updateMask();            // update with the same cadence as your render
-          requestAnimationFrame(raf);
-        })();
+    void main(){
+      vec2 px = gl_FragCoord.xy; vec2 res=uRes;
+      float kR = max(1., uK * max(uDropA.z, uDropB.z)); // smoothing in px
+      HN S = combine(px, uDropA, uDropB, kR, uUseB);
+      float h = max(S.h, 0.);
+      // mask (signed distance) for feathering
+      float tDummy; float d = (uUseB==1)
+        ? smin(length(px-uDropA.xy)-uDropA.z, length(px-uDropB.xy)-uDropB.z, kR, tDummy)
+        : length(px-uDropA.xy)-uDropA.z;
 
 
-        function resize() {
-            const d = Math.min(2, dpr);
-            canvas.width = Math.floor(innerWidth * d);
-            canvas.height = Math.floor(innerHeight * d);
-            canvas.style.width = innerWidth + "px";
-            canvas.style.height = innerHeight + "px";
-            gl.viewport(0, 0, canvas.width, canvas.height);
-        }
-        addEventListener("resize", resize);
-        resize();
-        function recenterIfOffscreen() {
-            const inside = (D) =>
-                D.cx > 0 && D.cx < canvas.width && D.cy > 0 && D.cy < canvas.height;
-            if (!inside(A)) {
-                A.cx = canvas.width * 0.45;
-                A.cy = canvas.height * 0.5;
-            }
-            if (!inside(B)) {
-                B.cx = canvas.width * 0.65;
-                B.cy = canvas.height * 0.52;
-            }
-        }
-        addEventListener("resize", () => {
-            resize();
-            recenterIfOffscreen();
-        });
-        recenterIfOffscreen();
-        setInterval(() => console.log("captured tex size:", texW, texH), 1000);
+      // REMOVE this early block (it’s before R/F/T1 exist):
+      // bool texReady = ...
+      // vec3 baseR = sky(R);
+      // vec3 refrCol = texReady ? sampleImageAtPx(px + T1.xy * tBot) : baseR;
+      // vec3 lensCol = mix(refrCol, baseR, F);
 
-        // input (drag A, Ctrl+drag B; wheel adjusts R/H/IOR)
-        let dragging = false,
-            target = A,
-            dx = 0,
-            dy = 0;
-        canvas.addEventListener("mousedown", (e) => {
-            dragging = true;
-            target = e.ctrlKey ? B : A;
-            const r = canvas.getBoundingClientRect();
-            const x = (e.clientX - r.left) * (canvas.width / r.width);
-            const y = (e.clientY - r.top) * (canvas.height / r.height);
-            dx = x - target.cx;
-            dy = y - target.cy;
-        });
-        addEventListener("mouseup", () => (dragging = false));
-        addEventListener("mousemove", (e) => {
-            if (!dragging) return;
-            const r = canvas.getBoundingClientRect();
-            const x = (e.clientX - r.left) * (canvas.width / r.width);
-            const y = (e.clientY - r.top) * (canvas.height / r.height);
-            target.cx = x - dx;
-            target.cy = y - dy;
-        });
-        addEventListener(
-            "wheel",
-            (e) => {
-                const D = e.ctrlKey ? B : A;
-                if (e.altKey) {
-                    IOR = Math.max(
-                        1.0,
-                        Math.min(2.0, IOR + (e.deltaY < 0 ? -0.005 : 0.005)),
-                    );
-                } else if (e.shiftKey) {
-                    D.H = Math.max(
-                        10,
-                        Math.min(600, D.H + (e.deltaY < 0 ? -6 : 6)),
-                    );
-                } else {
-                    D.R = Math.max(
-                        20,
-                        Math.min(1000, D.R + (e.deltaY < 0 ? -6 : 6)),
-                    );
-                }
-                e.preventDefault();
-            },
-            { passive: false },
-        );
-        addEventListener("keydown", (e) => {
-            if (e.key.toLowerCase() === "b") useB = !useB;
-            if (e.key === "-") feather = Math.max(0, feather - 1);
-            if (e.key === "=") feather = Math.min(64, feather + 1);
-        });
+      // KEEP one block at the end, in this order:
+      vec2 g2 = S.g; vec3 N = normalize(vec3(-g2, 1.));
+      vec3 I = vec3(0,0,-1); if(dot(I,N)>0.) N = -N;
+      vec3 R = reflect(I,N); float F = fresnel(max(0., dot(-I,N)), 1., uIOR);
+      vec3 T1; bool ok = refractSafe(I,N,1.,uIOR,T1);
+      float denom = min(-1e-6, T1.z);
+      float tBot  = clamp(-h/denom, 0., 8.*max(1.,h));
+      bool texReady = (uTexSize.x > 8. && uTexSize.y > 8.);
+      vec3 refrCol = texReady ? sampleImageAtPx(px + T1.xy*tBot) : sky(R);
+      vec3 lensCol = mix(refrCol, sky(R), F);
 
-        function smin(a, b, k) {
-            const t = Math.max(0, Math.min(1, 0.5 + (0.5 * (b - a)) / k));
-            return (1 - t) * b + t * a - k * t * (1 - t);
-        }
+      float soft = smoothstep(0., uFeather, -d);
+      float thickness = clamp(h / max(max(uDropA.w, uDropB.w), 1e-6), 0., 1.);
+      float w = clamp(soft * (0.4 + 0.6*thickness), 0., 1.);
+      vec3 outCol = mix(vec3(0.), lensCol, w);
+      o = vec4(outCol, w);
+                       // alpha = w (premultiplied by browser)
 
-        // click-through: forward only when inside feathered mask
-        function forwardPointer(type, e) {
-            // compute device-px coordinate
-            const r = canvas.getBoundingClientRect();
-            const x = (e.clientX - r.left) * (canvas.width / r.width);
-            const y = (e.clientY - r.top) * (canvas.height / r.height);
-            // test against union mask (same smin as shader)
-            // hit-test (same smin as shader)
+    }`;
+    function sh(t, s) {
+        const o = gl.createShader(t);
+        gl.shaderSource(o, s);
+        gl.compileShader(o);
+        if (!gl.getShaderParameter(o, gl.COMPILE_STATUS))
+            throw gl.getShaderInfoLog(o);
+        return o;
+    }
+    const prog = gl.createProgram();
+    gl.attachShader(prog, sh(gl.VERTEX_SHADER, vs));
+    gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS))
+        throw gl.getProgramInfoLog(prog);
+    gl.useProgram(prog);
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(
+        gl.ARRAY_BUFFER,
+        new Float32Array([-1, -1, 1, -1, -1, 1, 1, -1, 1, 1, -1, 1]),
+        gl.STATIC_DRAW,
+    );
+    const loc = gl.getAttribLocation(prog, "a");
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
 
-            let osPassthrough = false;
-            function updateIgnore(xDev, yDev) {
-                const kR = Math.max(1, K * Math.max(A.R, B.R)); // same K you use in shader
-                const dA = Math.hypot(xDev - A.cx, yDev - A.cy) - A.R;
-                const dB = Math.hypot(xDev - B.cx, yDev - B.cy) - B.R;
-                const d = useB ? smin(dA, dB, kR) : dA;
-                const shouldIgnore = d > 0; // outside union => pass to OS
-                if (shouldIgnore !== osPassthrough) {
-                    osPassthrough = shouldIgnore;
-                    window.orbAPI?.setIgnore(inside);
-                }
-            }
+    // uniforms
+    const uRes = gl.getUniformLocation(prog, "uRes");
+    const uTex = gl.getUniformLocation(prog, "uTex");
+    const uTexSize = gl.getUniformLocation(prog, "uTexSize");
+    const uDropA = gl.getUniformLocation(prog, "uDropA");
+    const uDropB = gl.getUniformLocation(prog, "uDropB");
+    const uUseB = gl.getUniformLocation(prog, "uUseB");
+    const uIOR = gl.getUniformLocation(prog, "uIOR");
+    const uFeather = gl.getUniformLocation(prog, "uFeather");
+    const uK = gl.getUniformLocation(prog, "uK");
 
-            // pointer handlers
-            function devXY(e) {
-                const r = canvas.getBoundingClientRect();
-                return [
-                    (e.clientX - r.left) * (canvas.width / r.width),
-                    (e.clientY - r.top) * (canvas.height / r.height),
-                ];
-            }
+    // texture
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.uniform1i(uTex, 0);
 
-            canvas.addEventListener("mousemove", (e) => {
-                const [x, y] = devXY(e);
-                updateIgnore(x, y);
-                if (!osPassthrough) sendToWebview("move", e, x, y);
-            });
-            canvas.addEventListener("mousedown", (e) => {
-                const [x, y] = devXY(e);
-                updateIgnore(x, y);
-                if (!osPassthrough) sendToWebview("down", e, x, y);
-            });
-            canvas.addEventListener("mouseup", (e) => {
-                const [x, y] = devXY(e);
-                updateIgnore(x, y);
-                if (!osPassthrough) sendToWebview("up", e, x, y);
-            });
-            canvas.addEventListener(
-                "wheel",
-                (e) => {
-                    const [x, y] = devXY(e);
-                    updateIgnore(x, y);
-                    if (!osPassthrough) sendToWebview("wheel", e, x, y);
-                },
-                { passive: true },
-            );
+    page.addEventListener("did-finish-load", () => {
+        grab();
+    }); // first bitmap
 
-            const kR = Math.max(1, K * Math.max(A.R, B.R));
-            const dA = Math.hypot(x - A.cx, y - A.cy) - A.R;
-            const dB = Math.hypot(x - B.cx, y - B.cy) - B.R;
-            const d = useB ? smin(dA, dB, kR) : dA;
-            const inside = -d > 1.0; // a bit inside to avoid edge ambiguity
-            if (!inside) return;
-            const cssX = x / dpr,
-                cssY = y / dpr;
-            const btn =
-                e.button === 2 ? "right" : e.button === 1 ? "middle" : "left";
-            if (type === "down")
-                window.orbAPI?.forwardInput({
-                    type: "mouseDown",
-                    x: cssX,
-                    y: cssY,
-                    button: btn,
-                    clickCount: 1,
-                });
-            if (type === "up")
-                window.orbAPI?.forwardInput({
-                    type: "mouseUp",
-                    x: cssX,
-                    y: cssY,
-                    button: btn,
-                    clickCount: 1,
-                });
-            if (type === "move")
-                window.orbAPI?.forwardInput({
-                    type: "mouseMove",
-                    x: cssX,
-                    y: cssY,
-                    movementX: e.movementX,
-                    movementY: e.movementY,
-                });
-            if (type === "wheel")
-                window.orbAPI?.forwardInput({
-                    type: "mouseWheel",
-                    x: cssX,
-                    y: cssY,
-                    deltaX: e.deltaX,
-                    deltaY: e.deltaY,
-                    deltaZ: 0,
-                    canScroll: true,
-                    hasPreciseScrollingDeltas: true,
-                });
-        }
-        canvas.addEventListener("mousedown", (e) => forwardPointer("down", e));
-        canvas.addEventListener("mouseup", (e) => forwardPointer("up", e));
-        canvas.addEventListener("mousemove", (e) => forwardPointer("move", e));
-        canvas.addEventListener(
-            "wheel",
-            (e) => {
-                forwardPointer("wheel", e);
-            },
-            { passive: true },
-        );
+    let texW = 2,
+        texH = 2;
+    // state
+    const A = { cx: 600, cy: 400, R: 180, H: 120 },
+        B = { cx: 860, cy: 420, R: 160, H: 110 };
+    let useB = true,
+        IOR = 1.333,
+        feather = 16,
+        K = 0.08;
 
-        wv.addEventListener("dom-ready", () => window.orbAPI.registerPage(wv.getWebContentsId()));
-
-
-        // render
-        function frame(ts) {
-            if (ts - lastCap > 33) {
-                lastCap = ts;
-                grab();
-            } // ~30 fps
-            gl.useProgram(prog);
-            gl.activeTexture(gl.TEXTURE0);
+    // capture loop (throttled ~30fps)
+    let lastCap = 0,
+        capBusy = false;
+    async function grab() {
+        if (capBusy) return;
+        capBusy = true;
+        const r = await window.orbAPI.capturePage();
+        if (r && r.ok) {
+            const bmp = await createImageBitmap(new Blob([r.png]));
+            texW = r.w; // already device px now
+            texH = r.h;
             gl.bindTexture(gl.TEXTURE_2D, tex);
-            gl.uniform2f(uRes, canvas.width, canvas.height);
-            gl.uniform2f(uTexSize, texW, texH);
-            gl.uniform4f(uDropA, A.cx, A.cy, A.R, A.H);
-            gl.uniform4f(uDropB, B.cx, B.cy, B.R, B.H);
-            gl.uniform1i(uUseB, useB ? 1 : 0);
-            gl.uniform1f(uIOR, IOR);
-            gl.uniform1f(uFeather, feather);
-            gl.uniform1f(uK, K);
-            gl.drawArrays(gl.TRIANGLES, 0, 6);
-            requestAnimationFrame(frame);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+            gl.texImage2D(
+                gl.TEXTURE_2D,
+                0,
+                gl.RGBA,
+                gl.RGBA,
+                gl.UNSIGNED_BYTE,
+                bmp,
+            );
         }
+
+        capBusy = false;
+    }
+    const wrap = document.getElementById("pageWrap");
+    function updateMask() {
+        // map GL px -> CSS px
+        const cssW = innerWidth,
+            cssH = innerHeight;
+        const sx = cssW / canvas.width,
+            sy = cssH / canvas.height;
+
+        const ax = A.cx * sx,
+            ay = A.cy * sy,
+            ar = A.R * sx;
+        const bx = B.cx * sx,
+            by = B.cy * sy,
+            br = B.R * sx;
+        const f = feather * sx;
+
+        // White (=visible) inside each orb, fade to transparent over feather
+        const gA = `radial-gradient(circle ${ar}px at ${ax}px ${ay}px, #fff 0 ${ar}px, #0000 ${ar + f}px)`;
+        const gB = `radial-gradient(circle ${br}px at ${bx}px ${by}px, #fff 0 ${br}px, #0000 ${br + f}px)`;
+
+        // Standard + webkit masks; use additive compose so both circles show
+        wrap.style.maskImage = `${gA}, ${gB}`;
+        wrap.style.maskComposite = "add, add";
+        wrap.style.webkitMaskImage = `${gA}, ${gB}`;
+        wrap.style.webkitMaskComposite = "source-over, source-over"; // Chrome additive
+        wrap.style.maskRepeat = wrap.style.webkitMaskRepeat =
+            "no-repeat, no-repeat";
+    }
+
+    // keep the mask in sync
+    addEventListener("resize", updateMask);
+    (function raf() {
+        updateMask(); // update with the same cadence as your render
+        requestAnimationFrame(raf);
+    })();
+
+    function resize() {
+        const d = Math.min(2, dpr);
+        canvas.width = Math.floor(innerWidth * d);
+        canvas.height = Math.floor(innerHeight * d);
+        canvas.style.width = innerWidth + "px";
+        canvas.style.height = innerHeight + "px";
+        gl.viewport(0, 0, canvas.width, canvas.height);
+    }
+    addEventListener("resize", resize);
+    resize();
+    function recenterIfOffscreen() {
+        const inside = (D) =>
+            D.cx > 0 && D.cx < canvas.width && D.cy > 0 && D.cy < canvas.height;
+        if (!inside(A)) {
+            A.cx = canvas.width * 0.45;
+            A.cy = canvas.height * 0.5;
+        }
+        if (!inside(B)) {
+            B.cx = canvas.width * 0.65;
+            B.cy = canvas.height * 0.52;
+        }
+    }
+    addEventListener("resize", () => {
+        resize();
+        recenterIfOffscreen();
+    });
+    recenterIfOffscreen();
+    setInterval(() => console.log("captured tex size:", texW, texH), 1000);
+
+    // input (drag A, Ctrl+drag B; wheel adjusts R/H/IOR)
+    let dragging = false,
+        target = A,
+        dx = 0,
+        dy = 0;
+    canvas.addEventListener("mousedown", (e) => {
+        dragging = true;
+        target = e.ctrlKey ? B : A;
+        const r = canvas.getBoundingClientRect();
+        const x = (e.clientX - r.left) * (canvas.width / r.width);
+        const y = (e.clientY - r.top) * (canvas.height / r.height);
+        dx = x - target.cx;
+        dy = y - target.cy;
+    });
+    addEventListener("mouseup", () => (dragging = false));
+    addEventListener("mousemove", (e) => {
+        if (!dragging) return;
+        const r = canvas.getBoundingClientRect();
+        const x = (e.clientX - r.left) * (canvas.width / r.width);
+        const y = (e.clientY - r.top) * (canvas.height / r.height);
+        target.cx = x - dx;
+        target.cy = y - dy;
+    });
+    addEventListener(
+        "wheel",
+        (e) => {
+            const D = e.ctrlKey ? B : A;
+            if (e.altKey) {
+                IOR = Math.max(
+                    1.0,
+                    Math.min(2.0, IOR + (e.deltaY < 0 ? -0.005 : 0.005)),
+                );
+            } else if (e.shiftKey) {
+                D.H = Math.max(
+                    10,
+                    Math.min(600, D.H + (e.deltaY < 0 ? -6 : 6)),
+                );
+            } else {
+                D.R = Math.max(
+                    20,
+                    Math.min(1000, D.R + (e.deltaY < 0 ? -6 : 6)),
+                );
+            }
+            e.preventDefault();
+        },
+        { passive: false },
+    );
+    addEventListener("keydown", (e) => {
+        if (e.key.toLowerCase() === "b") useB = !useB;
+        if (e.key === "-") feather = Math.max(0, feather - 1);
+        if (e.key === "=") feather = Math.min(64, feather + 1);
+    });
+
+    function smin(a, b, k) {
+        const t = Math.max(0, Math.min(1, 0.5 + (0.5 * (b - a)) / k));
+        return (1 - t) * b + t * a - k * t * (1 - t);
+    }
+
+    wv.addEventListener("dom-ready", () =>
+        window.orbAPI.registerPage(wv.getWebContentsId()),
+    );
+
+    /* keep your existing setup... (gl, uniforms, A/B state, grab(), mask, etc.) */
+
+    /* ---------- math twin of your fragment shader (device pixels) ---------- */
+    function cap_h_grad(px, d) {
+        // returns [h, gx, gy]
+        const vx = px[0] - d.cx,
+            vy = px[1] - d.cy;
+        const r = Math.hypot(vx, vy),
+            R = d.R,
+            H = d.H;
+        if (r >= R || R < 1e-6 || H <= 0) return [0, 0, 0];
+        const t = r / R,
+            s2 = Math.max(1e-6, 1 - t * t);
+        const h = H * (1 - Math.sqrt(s2));
+        const dhdr = (H * t) / (R * Math.sqrt(s2));
+        const g = r < 1e-5 ? [0, 0] : [(dhdr / r) * vx, (dhdr / r) * vy];
+        return [h, g[0], g[1]];
+    }
+    function sminJS(a, b, k) {
+        const t = Math.max(0, Math.min(1, 0.5 + (0.5 * (b - a)) / k));
+        return (1 - t) * b + t * a - k * t * (1 - t);
+    }
+    function combine(px, A, B, kR, useB) {
+        if (!useB) {
+            const a = cap_h_grad(px, A);
+            return { h: a[0], gx: a[1], gy: a[2] };
+        }
+        const fA = Math.hypot(px[0] - A.cx, px[1] - A.cy) - A.R;
+        const fB = Math.hypot(px[0] - B.cx, px[1] - B.cy) - B.R;
+        const d = sminJS(fA, fB, kR);
+        if (d > 0) return { h: 0, gx: 0, gy: 0 };
+        const a = cap_h_grad(px, A),
+            b = cap_h_grad(px, B);
+        // crude mix weight (same shape as shader's smin): reuse d's t formula
+        const t = Math.max(0, Math.min(1, 0.5 + (0.5 * (fB - fA)) / kR));
+        return {
+            h: (1 - t) * b[0] + t * a[0],
+            gx: (1 - t) * b[1] + t * a[1],
+            gy: (1 - t) * b[2] + t * a[2],
+        };
+    }
+    function refractSafe(I, N, etaI, etaT) {
+        const eta = etaI / etaT;
+        const c = Math.max(
+            -1,
+            Math.min(1, -(I[0] * N[0] + I[1] * N[1] + I[2] * N[2])),
+        );
+        const k = 1 - eta * eta * (1 - c * c);
+        if (k < 0) return null;
+        const s = eta * c - Math.sqrt(k);
+        return [
+            eta * I[0] + s * N[0],
+            eta * I[1] + s * N[1],
+            eta * I[2] + s * N[2],
+        ];
+    }
+
+    /* displacement used by the shader to sample the page texture */
+    function clickShiftDev(pxDev) {
+        // returns [dxDev, dyDev] in device pixels
+        const kR = Math.max(1, K * Math.max(A.R, B.R));
+        const S = combine(pxDev, A, B, kR, useB);
+        const h = Math.max(S.h, 0);
+        if (h <= 0) return [0, 0];
+        // surface normal:
+        const Nx = -S.gx,
+            Ny = -S.gy,
+            Nz = 1;
+        const invLen = 1 / Math.hypot(Nx, Ny, Nz);
+        const N = [Nx * invLen, Ny * invLen, Nz * invLen];
+        const I = [0, 0, -1];
+        // orient normal
+        const dot = I[0] * N[0] + I[1] * N[1] + I[2] * N[2];
+        if (dot > 0) {
+            N[0] *= -1;
+            N[1] *= -1;
+            N[2] *= -1;
+        }
+        const T1 = refractSafe(I, N, 1.0, IOR);
+        if (!T1) return [0, 0];
+        const denom = Math.min(-1e-6, T1[2]);
+        const tBot = Math.max(0, Math.min(8 * Math.max(1, h), -h / denom));
+        return [T1[0] * tBot, T1[1] * tBot];
+    }
+
+    /* reliable device<->css helpers */
+    function devXY(e) {
+        const r = canvas.getBoundingClientRect();
+        return [
+            (e.clientX - r.left) * (canvas.width / r.width),
+            (e.clientY - r.top) * (canvas.height / r.height),
+        ];
+    }
+
+    /* toggle OS passthrough ONLY when outside the orb union */
+    let osPassthrough = false;
+    function updateIgnoreAt(devX, devY) {
+        const kR = Math.max(1, K * Math.max(A.R, B.R));
+        const dA = Math.hypot(devX - A.cx, devY - A.cy) - A.R;
+        const dB = Math.hypot(devX - B.cx, devY - B.cy) - B.R;
+        const d = useB ? sminJS(dA, dB, kR) : dA;
+        const shouldIgnore = d > 0; // outside => ignore & send to OS
+        if (shouldIgnore !== osPassthrough) {
+            osPassthrough = shouldIgnore;
+            window.orbAPI?.setIgnore(shouldIgnore);
+        }
+        return d <= -1.0; // “confidently inside”
+    }
+
+    /* single set of listeners (don’t register them inside other handlers) */
+    canvas.addEventListener("mousemove", (e) => {
+        const [dx, dy] = devXY(e);
+        const inside = updateIgnoreAt(dx, dy);
+        if (!inside) return;
+        const [sx, sy] = clickShiftDev([dx, dy]);
+        window.orbAPI?.forwardInput({
+            type: "mouseMove",
+            x: (dx + sx) / dpr,
+            y: (dy + sy) / dpr,
+            movementX: e.movementX,
+            movementY: e.movementY,
+        });
+    });
+
+    canvas.addEventListener("mousedown", (e) => {
+        const [dx, dy] = devXY(e);
+        const inside = updateIgnoreAt(dx, dy);
+        if (!inside) return;
+        const [sx, sy] = clickShiftDev([dx, dy]);
+        const btn =
+            e.button === 2 ? "right" : e.button === 1 ? "middle" : "left";
+        window.orbAPI?.forwardInput({
+            type: "mouseDown",
+            x: (dx + sx) / dpr,
+            y: (dy + sy) / dpr,
+            button: btn,
+            clickCount: 1,
+        });
+    });
+
+    canvas.addEventListener("mouseup", (e) => {
+        const [dx, dy] = devXY(e);
+        const inside = updateIgnoreAt(dx, dy);
+        if (!inside) return;
+        const [sx, sy] = clickShiftDev([dx, dy]);
+        const btn =
+            e.button === 2 ? "right" : e.button === 1 ? "middle" : "left";
+        window.orbAPI?.forwardInput({
+            type: "mouseUp",
+            x: (dx + sx) / dpr,
+            y: (dy + sy) / dpr,
+            button: btn,
+            clickCount: 1,
+        });
+    });
+
+    canvas.addEventListener(
+        "wheel",
+        (e) => {
+            const [dx, dy] = devXY(e);
+            const inside = updateIgnoreAt(dx, dy);
+            if (!inside) return;
+            const [sx, sy] = clickShiftDev([dx, dy]);
+            window.orbAPI?.forwardInput({
+                type: "mouseWheel",
+                x: (dx + sx) / dpr,
+                y: (dy + sy) / dpr,
+                deltaX: e.deltaX,
+                deltaY: e.deltaY,
+                deltaZ: 0,
+                canScroll: true,
+                hasPreciseScrollingDeltas: true,
+            });
+        },
+        { passive: true },
+    );
+
+    /* focus + keys to the page (so inputs work) */
+    addEventListener("keydown", (e) => {
+        if (osPassthrough) return; // if outside orb, don't steal keys
+        window.orbAPI?.forwardInput({
+            type: "keyDown",
+            keyCode: e.key,
+            modifiers: [
+                e.altKey && "alt",
+                e.ctrlKey && "control",
+                e.shiftKey && "shift",
+                e.metaKey && "meta",
+            ].filter(Boolean),
+        });
+        if (e.key.length === 1)
+            window.orbAPI?.forwardInput({ type: "char", keyCode: e.key });
+    });
+    addEventListener("keyup", (e) => {
+        if (osPassthrough) return;
+        window.orbAPI?.forwardInput({ type: "keyUp", keyCode: e.key });
+    });
+
+    /* ensure page id is registered once */
+
+    // render
+    function frame(ts) {
+        if (ts - lastCap > 33) {
+            lastCap = ts;
+            grab();
+        } // ~30 fps
+        gl.useProgram(prog);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.uniform2f(uRes, canvas.width, canvas.height);
+        gl.uniform2f(uTexSize, texW, texH);
+        gl.uniform4f(uDropA, A.cx, A.cy, A.R, A.H);
+        gl.uniform4f(uDropB, B.cx, B.cy, B.R, B.H);
+        gl.uniform1i(uUseB, useB ? 1 : 0);
+        gl.uniform1f(uIOR, IOR);
+        gl.uniform1f(uFeather, feather);
+        gl.uniform1f(uK, K);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
         requestAnimationFrame(frame);
-    </script>
-</webview>
+    }
+    requestAnimationFrame(frame);
+</script>

@@ -1,7 +1,9 @@
+// preload.cjs
 const { contextBridge, ipcRenderer } = require("electron");
+
 contextBridge.exposeInMainWorld("orbAPI", {
-  setIgnore: (b) => ipcRenderer.send("set-ignore", b),
-  forwardInput: (ev) => ipcRenderer.invoke("forward-input", ev),
-  registerPage: (id) => ipcRenderer.invoke("register-page", id),
-  capturePage: () => ipcRenderer.invoke("capture-page"),
+  registerPage: (id) => ipcRenderer.send("orb:register", id),
+  forwardInput: (ev) => ipcRenderer.send("orb:input", ev),
+  setIgnore: (ignore) => ipcRenderer.send("orb:ignore", !!ignore),
+  capturePage: () => ipcRenderer.invoke("orb:capture"),
 });
