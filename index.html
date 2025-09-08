@@ -1,0 +1,389 @@
+<!doctype html><meta charset="utf-8" />
+<title>Crumple Orbs — Browser Overlay</title>
+<style>
+    html,
+    body {
+        margin: 0;
+        height: 100%;
+        background: transparent;
+        overflow: hidden;
+    }
+    #hud {
+        position: fixed;
+        left: 10px;
+        top: 10px;
+        z-index: 10;
+        font: 12px system-ui;
+        color: #e5e7eb;
+        background: #11121acc;
+        border: 1px solid #232536;
+        border-radius: 10px;
+        padding: 8px 10px;
+    }
+    #gl {
+        position: fixed;
+        inset: 0;
+        display: block;
+    }
+    #page {
+        position: fixed;
+        inset: 0;
+        opacity: 0;
+        pointer-events: none;
+    } /* hidden but renders */
+    input[type="url"] {
+        width: 480px;
+        background: #0b0b10;
+        border: 1px solid #232536;
+        color: #e5e7eb;
+        border-radius: 8px;
+        padding: 6px 8px;
+    }
+</style>
+<div id="hud">
+    <form id="nav">
+        <input
+            id="url"
+            type="url"
+            placeholder="https://example.org"
+            value="https://news.ycombinator.com"
+        />
+    </form>
+    <div>
+        Drag = move A; Ctrl+Drag = move B · Wheel=R · Shift+Wheel=H ·
+        Alt+Wheel=IOR
+    </div>
+    <div>-/= feather · B toggle 2nd drop</div>
+</div>
+<webview id="page" src="about:blank"></webview>
+<canvas id="gl"></canvas>
+<script>
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const page = document.getElementById("page");
+    const nav = document.getElementById("nav"),
+        url = document.getElementById("url");
+    nav.addEventListener("submit", (e) => {
+        e.preventDefault();
+        page.loadURL(url.value);
+    });
+
+    page.addEventListener("dom-ready", () => {
+        window.orbAPI.registerPage(page.getWebContentsId());
+    });
+
+    const canvas = document.getElementById("gl");
+    const gl = canvas.getContext("webgl2", {
+        antialias: true,
+        premultipliedAlpha: true,
+    });
+    if (!gl) {
+        alert("WebGL2 required");
+    }
+
+    const vs = `#version 300 es
+in vec2 a; void main(){gl_Position=vec4(a,0.,1.);} `;
+    const fs = `#version 300 es
+precision highp float; out vec4 o;
+uniform sampler2D uTex; uniform vec2 uRes; uniform vec2 uTexSize;
+uniform vec4 uDropA, uDropB; uniform int uUseB; uniform float uIOR, uFeather, uK;
+vec3 sampleImageAtPx(vec2 px){
+  vec2 uv = px / uTexSize; uv.y = 1. - uv.y; uv = clamp(uv,0.,1.); // flip Y
+  return texture(uTex, uv).rgb;
+}
+vec3 sky(vec3 d){ d=normalize(d); float up=clamp(d.z*.5+.5,0.,1.);
+  return mix(vec3(.12,.16,.26), vec3(.55,.66,.92), up); }
+bool refractSafe(vec3 I, vec3 N, float etaI, float etaT, out vec3 T){
+  float eta=etaI/etaT, c=clamp(dot(-I,N),-1.,1.), k=1.-eta*eta*(1.-c*c);
+  if(k<0.){T=vec3(0);return false;} T=normalize(eta*I+(eta*c-sqrt(k))*N); return true;
+}
+vec3 cap_h_grad(vec2 px, vec4 d){ // (h, ∇h)
+  vec2 v = px - d.xy; float r=length(v), R=d.z, H=d.w;
+  if(r>=R||R<1e-6||H<=0.) return vec3(0.);
+  float t=r/R, s2=max(1e-6,1.-t*t); float h = H*(1.-sqrt(s2));
+  float dhdr = H*t/(R*sqrt(s2));
+  vec2 g = (r<1e-5)? vec2(0): (dhdr/r)*v;
+  return vec3(h,g);
+}
+float smin(float a,float b,float k,out float t){
+  t = clamp(0.5+0.5*(b-a)/k,0.,1.); return mix(b,a,t)-k*t*(1.-t);
+}
+struct HN{float h; vec2 g;};
+HN combine(vec2 px, vec4 A, vec4 B, float kR, int useB){
+  if(useB==0){ vec3 a=cap_h_grad(px,A); return HN(a.x,a.yz); }
+  float fA = length(px-A.xy)-A.z, fB = length(px-B.xy)-B.z; float t;
+  float d = smin(fA,fB,kR,t); if(d>0.) return HN(0.,vec2(0));
+  vec3 a=cap_h_grad(px,A), b=cap_h_grad(px,B);
+  return HN(mix(b.x,a.x,t), mix(b.yz,a.yz,t));
+}
+float fresnel(float c,float ei,float et){ float R0=(ei-et)/(ei+et); R0*=R0; return R0+(1.-R0)*pow(1.-c,5.); }
+
+void main(){
+  vec2 px = gl_FragCoord.xy; vec2 res=uRes;
+  float kR = max(1., uK * max(uDropA.z, uDropB.z)); // smoothing in px
+  HN S = combine(px, uDropA, uDropB, kR, uUseB);
+  float h = max(S.h, 0.);
+  // mask (signed distance) for feathering
+  float tDummy; float d = (uUseB==1)
+    ? smin(length(px-uDropA.xy)-uDropA.z, length(px-uDropB.xy)-uDropB.z, kR, tDummy)
+    : length(px-uDropA.xy)-uDropA.z;
+
+  vec3 base = sampleImageAtPx(px); // outside lens
+  if (h<=1e-6){ // still feather in
+    float soft = smoothstep(0., uFeather, -d);
+    o = vec4(pow(mix(base, base, soft), vec3(1./2.2)), 1.); return;
+  }
+
+  // shading/refraction
+  vec2 g2 = S.g; vec3 N = normalize(vec3(-g2, 1.));
+  vec3 I = vec3(0,0,-1); if(dot(I,N)>0.) N = -N;
+  vec3 R = reflect(I,N); float F = fresnel(max(0.,dot(-I,N)), 1., uIOR);
+  vec3 T1; bool ok = refractSafe(I,N,1.,uIOR,T1);
+  float denom = min(-1e-6, T1.z);
+  float tBot = clamp(-h/denom, 0., 8.*max(1.,h));
+  vec3 lensCol = mix(sampleImageAtPx(px + T1.xy*tBot), sky(R), F);
+
+  // feathered mix to background
+  float soft = smoothstep(0., uFeather, -d);
+  float thickness = clamp(h / max(max(uDropA.w, uDropB.w), 1e-6), 0., 1.);
+  float w = clamp(soft * (0.4 + 0.6*thickness), 0., 1.);
+  vec3 outCol = mix(base, lensCol, w);
+  o = vec4(pow(max(outCol,0.), vec3(1./2.2)), 1.);
+}`;
+    function sh(t, s) {
+        const o = gl.createShader(t);
+        gl.shaderSource(o, s);
+        gl.compileShader(o);
+        if (!gl.getShaderParameter(o, gl.COMPILE_STATUS))
+            throw gl.getShaderInfoLog(o);
+        return o;
+    }
+    const prog = gl.createProgram();
+    gl.attachShader(prog, sh(gl.VERTEX_SHADER, vs));
+    gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS))
+        throw gl.getProgramInfoLog(prog);
+    gl.useProgram(prog);
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(
+        gl.ARRAY_BUFFER,
+        new Float32Array([-1, -1, 1, -1, -1, 1, 1, -1, 1, 1, -1, 1]),
+        gl.STATIC_DRAW,
+    );
+    const loc = gl.getAttribLocation(prog, "a");
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+
+    // uniforms
+    const uRes = gl.getUniformLocation(prog, "uRes");
+    const uTex = gl.getUniformLocation(prog, "uTex");
+    const uTexSize = gl.getUniformLocation(prog, "uTexSize");
+    const uDropA = gl.getUniformLocation(prog, "uDropA");
+    const uDropB = gl.getUniformLocation(prog, "uDropB");
+    const uUseB = gl.getUniformLocation(prog, "uUseB");
+    const uIOR = gl.getUniformLocation(prog, "uIOR");
+    const uFeather = gl.getUniformLocation(prog, "uFeather");
+    const uK = gl.getUniformLocation(prog, "uK");
+
+    // texture
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.uniform1i(uTex, 0);
+
+    let texW = 2,
+        texH = 2;
+    // state
+    const A = { cx: 600, cy: 400, R: 180, H: 120 },
+        B = { cx: 860, cy: 420, R: 160, H: 110 };
+    let useB = true,
+        IOR = 1.333,
+        feather = 16,
+        K = 0.08;
+
+    // capture loop (throttled ~30fps)
+    let lastCap = 0,
+        capBusy = false;
+    async function grab() {
+        if (capBusy) return;
+        capBusy = true;
+        const r = await window.orbAPI.capturePage();
+        if (r && r.ok) {
+            const img = new Image();
+            img.src = URL.createObjectURL(new Blob([r.png]));
+            await img.decode();
+            texW = r.w;
+            texH = r.h;
+            gl.bindTexture(gl.TEXTURE_2D, tex);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+            gl.texImage2D(
+                gl.TEXTURE_2D,
+                0,
+                gl.RGBA,
+                gl.RGBA,
+                gl.UNSIGNED_BYTE,
+                img,
+            );
+            URL.revokeObjectURL(img.src);
+        }
+        capBusy = false;
+    }
+
+    function resize() {
+        const d = Math.min(2, dpr);
+        canvas.width = Math.floor(innerWidth * d);
+        canvas.height = Math.floor(innerHeight * d);
+        canvas.style.width = innerWidth + "px";
+        canvas.style.height = innerHeight + "px";
+        gl.viewport(0, 0, canvas.width, canvas.height);
+    }
+    addEventListener("resize", resize);
+    resize();
+
+    // input (drag A, Ctrl+drag B; wheel adjusts R/H/IOR)
+    let dragging = false,
+        target = A,
+        dx = 0,
+        dy = 0;
+    canvas.addEventListener("mousedown", (e) => {
+        dragging = true;
+        target = e.ctrlKey ? B : A;
+        const r = canvas.getBoundingClientRect();
+        const x = (e.clientX - r.left) * (canvas.width / r.width);
+        const y = (e.clientY - r.top) * (canvas.height / r.height);
+        dx = x - target.cx;
+        dy = y - target.cy;
+    });
+    addEventListener("mouseup", () => (dragging = false));
+    addEventListener("mousemove", (e) => {
+        if (!dragging) return;
+        const r = canvas.getBoundingClientRect();
+        const x = (e.clientX - r.left) * (canvas.width / r.width);
+        const y = (e.clientY - r.top) * (canvas.height / r.height);
+        target.cx = x - dx;
+        target.cy = y - dy;
+    });
+    addEventListener(
+        "wheel",
+        (e) => {
+            const D = e.ctrlKey ? B : A;
+            if (e.altKey) {
+                IOR = Math.max(
+                    1.0,
+                    Math.min(2.0, IOR + (e.deltaY < 0 ? -0.005 : 0.005)),
+                );
+            } else if (e.shiftKey) {
+                D.H = Math.max(
+                    10,
+                    Math.min(600, D.H + (e.deltaY < 0 ? -6 : 6)),
+                );
+            } else {
+                D.R = Math.max(
+                    20,
+                    Math.min(1000, D.R + (e.deltaY < 0 ? -6 : 6)),
+                );
+            }
+            e.preventDefault();
+        },
+        { passive: false },
+    );
+    addEventListener("keydown", (e) => {
+        if (e.key.toLowerCase() === "b") useB = !useB;
+        if (e.key === "-") feather = Math.max(0, feather - 1);
+        if (e.key === "=") feather = Math.min(64, feather + 1);
+    });
+
+    // click-through: forward only when inside feathered mask
+    function forwardPointer(type, e) {
+        // compute device-px coordinate
+        const r = canvas.getBoundingClientRect();
+        const x = (e.clientX - r.left) * (canvas.width / r.width);
+        const y = (e.clientY - r.top) * (canvas.height / r.height);
+        // test against union mask (same smin as shader)
+        function smin(a, b, k) {
+            const t = Math.max(0, Math.min(1, 0.5 + (0.5 * (b - a)) / k));
+            return (1 - t) * b + t * a - k * t * (1 - t);
+        }
+        const kR = Math.max(1, K * Math.max(A.R, B.R));
+        const dA = Math.hypot(x - A.cx, y - A.cy) - A.R;
+        const dB = Math.hypot(x - B.cx, y - B.cy) - B.R;
+        const d = useB ? smin(dA, dB, kR) : dA;
+        const inside = -d > 1.0; // a bit inside to avoid edge ambiguity
+        if (!inside) return;
+        const cssX = x / dpr,
+            cssY = y / dpr;
+        const btn =
+            e.button === 2 ? "right" : e.button === 1 ? "middle" : "left";
+        if (type === "down")
+            window.orbAPI.forwardInput({
+                type: "mouseDown",
+                x: cssX,
+                y: cssY,
+                button: btn,
+                clickCount: 1,
+            });
+        if (type === "up")
+            window.orbAPI.forwardInput({
+                type: "mouseUp",
+                x: cssX,
+                y: cssY,
+                button: btn,
+                clickCount: 1,
+            });
+        if (type === "move")
+            window.orbAPI.forwardInput({
+                type: "mouseMove",
+                x: cssX,
+                y: cssY,
+                movementX: e.movementX,
+                movementY: e.movementY,
+            });
+        if (type === "wheel")
+            window.orbAPI.forwardInput({
+                type: "mouseWheel",
+                x: cssX,
+                y: cssY,
+                deltaX: e.deltaX,
+                deltaY: e.deltaY,
+                deltaZ: 0,
+                canScroll: true,
+                hasPreciseScrollingDeltas: true,
+            });
+    }
+    canvas.addEventListener("mousedown", (e) => forwardPointer("down", e));
+    canvas.addEventListener("mouseup", (e) => forwardPointer("up", e));
+    canvas.addEventListener("mousemove", (e) => forwardPointer("move", e));
+    canvas.addEventListener(
+        "wheel",
+        (e) => {
+            forwardPointer("wheel", e);
+        },
+        { passive: true },
+    );
+
+    // render
+    function frame(ts) {
+        if (ts - lastCap > 33) {
+            lastCap = ts;
+            grab();
+        } // ~30 fps
+        gl.useProgram(prog);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.uniform2f(uRes, canvas.width, canvas.height);
+        gl.uniform2f(uTexSize, texW, texH);
+        gl.uniform4f(uDropA, A.cx, A.cy, A.R, A.H);
+        gl.uniform4f(uDropB, B.cx, B.cy, B.R, B.H);
+        gl.uniform1i(uUseB, useB ? 1 : 0);
+        gl.uniform1f(uIOR, IOR);
+        gl.uniform1f(uFeather, feather);
+        gl.uniform1f(uK, K);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+        requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+</script>
