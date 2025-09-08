@@ -73,8 +73,9 @@
     const dpr = Math.max(1, window.devicePixelRatio || 1);
     // index.html renderer
     const page = document.getElementById("page");
-    // renderer, after you grab #page and #url
-    page.src = url.value; // load once at startup (not in dom-ready)
+    const nav = document.getElementById("nav"),
+        url = document.getElementById("url");
+    page.src = url.value; // now safe
     page.addEventListener("dom-ready", () => {
         window.orbAPI.registerPage(page.getWebContentsId());
     });
@@ -85,8 +86,7 @@
         if (e.errorCode !== -3)
             console.error("webview load failed:", e.errorCode, e.validatedURL);
     });
-    const nav = document.getElementById("nav"),
-        url = document.getElementById("url");
+
     nav.addEventListener("submit", (e) => {
         e.preventDefault();
         page.loadURL(url.value);
@@ -99,10 +99,9 @@
 
     function sendToWebview(type, e, xDev, yDev) {
         const dpr = window.devicePixelRatio || 1;
-        const x = xDev / (dpr * zoom),
-            y = yDev / (dpr * zoom);
         const x = xDev / (dpr * zoom);
         const y = yDev / (dpr * zoom);
+
         const button =
             e?.button === 2 ? "right" : e?.button === 1 ? "middle" : "left";
         if (type === "down")
@@ -161,85 +160,83 @@
         window.orbAPI.setIgnore(d > 0); // OS passthrough when outside
     }
 
-    console.log("tex size", texW, texH); // should become the page size
-
     const vs = `#version 300 es
-in vec2 a; void main(){gl_Position=vec4(a,0.,1.);} `;
+    in vec2 a; void main(){gl_Position=vec4(a,0.,1.);} `;
     const fs = `#version 300 es
-precision highp float; out vec4 o;
-uniform sampler2D uTex; uniform vec2 uRes; uniform vec2 uTexSize;
-uniform vec4 uDropA, uDropB; uniform int uUseB; uniform float uIOR, uFeather, uK;
-vec3 sampleImageAtPx(vec2 px){
-  vec2 uv = px / uTexSize; uv.y = 1. - uv.y; uv = clamp(uv,0.,1.); // flip Y
-  return texture(uTex, uv).rgb;
-}
-vec3 sky(vec3 d){ d=normalize(d); float up=clamp(d.z*.5+.5,0.,1.);
-  return mix(vec3(.12,.16,.26), vec3(.55,.66,.92), up); }
-bool refractSafe(vec3 I, vec3 N, float etaI, float etaT, out vec3 T){
-  float eta=etaI/etaT, c=clamp(dot(-I,N),-1.,1.), k=1.-eta*eta*(1.-c*c);
-  if(k<0.){T=vec3(0);return false;} T=normalize(eta*I+(eta*c-sqrt(k))*N); return true;
-}
-vec3 cap_h_grad(vec2 px, vec4 d){ // (h, ∇h)
-  vec2 v = px - d.xy; float r=length(v), R=d.z, H=d.w;
-  if(r>=R||R<1e-6||H<=0.) return vec3(0.);
-  float t=r/R, s2=max(1e-6,1.-t*t); float h = H*(1.-sqrt(s2));
-  float dhdr = H*t/(R*sqrt(s2));
-  vec2 g = (r<1e-5)? vec2(0): (dhdr/r)*v;
-  return vec3(h,g);
-}
-float smin(float a,float b,float k,out float t){
-  t = clamp(0.5+0.5*(b-a)/k,0.,1.); return mix(b,a,t)-k*t*(1.-t);
-}
-struct HN{float h; vec2 g;};
-HN combine(vec2 px, vec4 A, vec4 B, float kR, int useB){
-  if(useB==0){ vec3 a=cap_h_grad(px,A); return HN(a.x,a.yz); }
-  float fA = length(px-A.xy)-A.z, fB = length(px-B.xy)-B.z; float t;
-  float d = smin(fA,fB,kR,t); if(d>0.) return HN(0.,vec2(0));
-  vec3 a=cap_h_grad(px,A), b=cap_h_grad(px,B);
-  return HN(mix(b.x,a.x,t), mix(b.yz,a.yz,t));
-}
-float fresnel(float c,float ei,float et){ float R0=(ei-et)/(ei+et); R0*=R0; return R0+(1.-R0)*pow(1.-c,5.); }
+    precision highp float; out vec4 o;
+    uniform sampler2D uTex; uniform vec2 uRes; uniform vec2 uTexSize;
+    uniform vec4 uDropA, uDropB; uniform int uUseB; uniform float uIOR, uFeather, uK;
+    vec3 sampleImageAtPx(vec2 px){
+      vec2 uv = px / uTexSize; uv.y = 1. - uv.y; uv = clamp(uv,0.,1.); // flip Y
+      return texture(uTex, uv).rgb;
+    }
+    vec3 sky(vec3 d){ d=normalize(d); float up=clamp(d.z*.5+.5,0.,1.);
+      return mix(vec3(.12,.16,.26), vec3(.55,.66,.92), up); }
+    bool refractSafe(vec3 I, vec3 N, float etaI, float etaT, out vec3 T){
+      float eta=etaI/etaT, c=clamp(dot(-I,N),-1.,1.), k=1.-eta*eta*(1.-c*c);
+      if(k<0.){T=vec3(0);return false;} T=normalize(eta*I+(eta*c-sqrt(k))*N); return true;
+    }
+    vec3 cap_h_grad(vec2 px, vec4 d){ // (h, ∇h)
+      vec2 v = px - d.xy; float r=length(v), R=d.z, H=d.w;
+      if(r>=R||R<1e-6||H<=0.) return vec3(0.);
+      float t=r/R, s2=max(1e-6,1.-t*t); float h = H*(1.-sqrt(s2));
+      float dhdr = H*t/(R*sqrt(s2));
+      vec2 g = (r<1e-5)? vec2(0): (dhdr/r)*v;
+      return vec3(h,g);
+    }
+    float smin(float a,float b,float k,out float t){
+      t = clamp(0.5+0.5*(b-a)/k,0.,1.); return mix(b,a,t)-k*t*(1.-t);
+    }
+    struct HN{float h; vec2 g;};
+    HN combine(vec2 px, vec4 A, vec4 B, float kR, int useB){
+      if(useB==0){ vec3 a=cap_h_grad(px,A); return HN(a.x,a.yz); }
+      float fA = length(px-A.xy)-A.z, fB = length(px-B.xy)-B.z; float t;
+      float d = smin(fA,fB,kR,t); if(d>0.) return HN(0.,vec2(0));
+      vec3 a=cap_h_grad(px,A), b=cap_h_grad(px,B);
+      return HN(mix(b.x,a.x,t), mix(b.yz,a.yz,t));
+    }
+    float fresnel(float c,float ei,float et){ float R0=(ei-et)/(ei+et); R0*=R0; return R0+(1.-R0)*pow(1.-c,5.); }
 
-void main(){
-  vec2 px = gl_FragCoord.xy; vec2 res=uRes;
-  float kR = max(1., uK * max(uDropA.z, uDropB.z)); // smoothing in px
-  HN S = combine(px, uDropA, uDropB, kR, uUseB);
-  float h = max(S.h, 0.);
-  // mask (signed distance) for feathering
-  float tDummy; float d = (uUseB==1)
-    ? smin(length(px-uDropA.xy)-uDropA.z, length(px-uDropB.xy)-uDropB.z, kR, tDummy)
-    : length(px-uDropA.xy)-uDropA.z;
+    void main(){
+      vec2 px = gl_FragCoord.xy; vec2 res=uRes;
+      float kR = max(1., uK * max(uDropA.z, uDropB.z)); // smoothing in px
+      HN S = combine(px, uDropA, uDropB, kR, uUseB);
+      float h = max(S.h, 0.);
+      // mask (signed distance) for feathering
+      float tDummy; float d = (uUseB==1)
+        ? smin(length(px-uDropA.xy)-uDropA.z, length(px-uDropB.xy)-uDropB.z, kR, tDummy)
+        : length(px-uDropA.xy)-uDropA.z;
 
-  vec3 base = sampleImageAtPx(px); // outside lens
-  if (h<=1e-6){ // still feather in
-    float soft = smoothstep(0., uFeather, -d);
-    o = vec4(pow(mix(base, base, soft), vec3(1./2.2)), 1.); return;
-  }
-  // REMOVE this early block (it’s before R/F/T1 exist):
-  // bool texReady = ...
-  // vec3 baseR = sky(R);
-  // vec3 refrCol = texReady ? sampleImageAtPx(px + T1.xy * tBot) : baseR;
-  // vec3 lensCol = mix(refrCol, baseR, F);
+      vec3 base = sampleImageAtPx(px); // outside lens
+      if (h<=1e-6){ // still feather in
+        float soft = smoothstep(0., uFeather, -d);
+        o = vec4(pow(mix(base, base, soft), vec3(1./2.2)), 1.); return;
+      }
+      // REMOVE this early block (it’s before R/F/T1 exist):
+      // bool texReady = ...
+      // vec3 baseR = sky(R);
+      // vec3 refrCol = texReady ? sampleImageAtPx(px + T1.xy * tBot) : baseR;
+      // vec3 lensCol = mix(refrCol, baseR, F);
 
-  // KEEP one block at the end, in this order:
-  vec2 g2 = S.g; vec3 N = normalize(vec3(-g2, 1.));
-  vec3 I = vec3(0,0,-1); if(dot(I,N)>0.) N = -N;
-  vec3 R = reflect(I,N); float F = fresnel(max(0., dot(-I,N)), 1., uIOR);
-  vec3 T1; bool ok = refractSafe(I,N,1.,uIOR,T1);
-  float denom = min(-1e-6, T1.z);
-  float tBot  = clamp(-h/denom, 0., 8.*max(1.,h));
-  bool texReady = (uTexSize.x > 8. && uTexSize.y > 8.);
-  vec3 refrCol = texReady ? sampleImageAtPx(px + T1.xy*tBot) : sky(R);
-  vec3 lensCol = mix(refrCol, sky(R), F);
+      // KEEP one block at the end, in this order:
+      vec2 g2 = S.g; vec3 N = normalize(vec3(-g2, 1.));
+      vec3 I = vec3(0,0,-1); if(dot(I,N)>0.) N = -N;
+      vec3 R = reflect(I,N); float F = fresnel(max(0., dot(-I,N)), 1., uIOR);
+      vec3 T1; bool ok = refractSafe(I,N,1.,uIOR,T1);
+      float denom = min(-1e-6, T1.z);
+      float tBot  = clamp(-h/denom, 0., 8.*max(1.,h));
+      bool texReady = (uTexSize.x > 8. && uTexSize.y > 8.);
+      vec3 refrCol = texReady ? sampleImageAtPx(px + T1.xy*tBot) : sky(R);
+      vec3 lensCol = mix(refrCol, sky(R), F);
 
-  float soft = smoothstep(0., uFeather, -d);
-  float thickness = clamp(h / max(max(uDropA.w, uDropB.w), 1e-6), 0., 1.);
-  float w = clamp(soft * (0.4 + 0.6*thickness), 0., 1.);
-  vec3 outCol = mix(vec3(0.), lensCol, w);
-  o = vec4(outCol, w);
-                   // alpha = w (premultiplied by browser)
+      float soft = smoothstep(0., uFeather, -d);
+      float thickness = clamp(h / max(max(uDropA.w, uDropB.w), 1e-6), 0., 1.);
+      float w = clamp(soft * (0.4 + 0.6*thickness), 0., 1.);
+      vec3 outCol = mix(vec3(0.), lensCol, w);
+      o = vec4(outCol, w);
+                       // alpha = w (premultiplied by browser)
 
-}`;
+    }`;
     function sh(t, s) {
         const o = gl.createShader(t);
         gl.shaderSource(o, s);
@@ -407,6 +404,11 @@ void main(){
         if (e.key === "=") feather = Math.min(64, feather + 1);
     });
 
+    function smin(a, b, k) {
+        const t = Math.max(0, Math.min(1, 0.5 + (0.5 * (b - a)) / k));
+        return (1 - t) * b + t * a - k * t * (1 - t);
+    }
+
     // click-through: forward only when inside feathered mask
     function forwardPointer(type, e) {
         // compute device-px coordinate
@@ -415,10 +417,6 @@ void main(){
         const y = (e.clientY - r.top) * (canvas.height / r.height);
         // test against union mask (same smin as shader)
         // hit-test (same smin as shader)
-        function smin(a, b, k) {
-            const t = Math.max(0, Math.min(1, 0.5 + (0.5 * (b - a)) / k));
-            return (1 - t) * b + t * a - k * t * (1 - t);
-        }
 
         let osPassthrough = false;
         function updateIgnore(xDev, yDev) {
