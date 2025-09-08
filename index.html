@@ -144,7 +144,9 @@
     const gl = canvas.getContext("webgl2", {
         antialias: true,
         premultipliedAlpha: true,
+        alpha: true,
     });
+
     if (!gl) {
         alert("WebGL2 required");
     }
@@ -207,11 +209,7 @@
         ? smin(length(px-uDropA.xy)-uDropA.z, length(px-uDropB.xy)-uDropB.z, kR, tDummy)
         : length(px-uDropA.xy)-uDropA.z;
 
-      vec3 base = sampleImageAtPx(px); // outside lens
-      if (h<=1e-6){ // still feather in
-        float soft = smoothstep(0., uFeather, -d);
-        o = vec4(pow(mix(base, base, soft), vec3(1./2.2)), 1.); return;
-      }
+
       // REMOVE this early block (it’s before R/F/T1 exist):
       // bool texReady = ...
       // vec3 baseR = sky(R);
