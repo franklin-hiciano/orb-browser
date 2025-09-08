@@ -2,10 +2,12 @@
 import { app, BrowserWindow, ipcMain, webContents } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-let win, pageWC;
+let win;
+let pageWC = null;
 
 function createWindow() {
   win = new BrowserWindow({
@@ -13,41 +15,51 @@ function createWindow() {
     height: 800,
     transparent: true,
     frame: false,
-    backgroundColor: "#00000000",
+    hasShadow: false,
+    alwaysOnTop: true,
     webPreferences: {
-      preload: path.join(__dirname, "preload.cjs"),
+      preload: path.join(__dirname, "preload.cjs"), // preload stays CJS
       contextIsolation: true,
       nodeIntegration: false,
+      webviewTag: true,
       backgroundThrottling: false,
-      webviewTag: true, // <-- REQUIRED
     },
   });
-  win.setIgnoreMouseEvents(false, { forward: true });
+
   win.loadFile("index.html");
+
+  // IMPORTANT: keep OS-level passthrough OFF by default
+  win.setIgnoreMouseEvents(false);
 }
 
+// App lifecycle
 app.whenReady().then(createWindow);
 
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") app.quit();
+});
+
+app.on("activate", () => {
+  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+});
+
+// IPC wiring
 ipcMain.on("orb:register", (_evt, id) => {
   pageWC = webContents.fromId(id);
-  console.log("registered webview wc id:", id);
 });
 
-ipcMain.on("orb:ignore", (_evt, ignore) => {
-  if (win) win.setIgnoreMouseEvents(!!ignore, { forward: true });
+ipcMain.on("orb:set-ignore", (_evt, ignore) => {
+  if (win)
+    win.setIgnoreMouseEvents(!!ignore, ignore ? { forward: true } : undefined);
 });
 
-ipcMain.on("orb:input", (_evt, ev) => {
-  if (pageWC && !pageWC.isDestroyed()) pageWC.sendInputEvent(ev);
+ipcMain.on("orb:forward-input", (_evt, ev) => {
+  if (pageWC) pageWC.sendInputEvent(ev);
 });
 
 ipcMain.handle("orb:capture", async () => {
-  if (!pageWC || pageWC.isDestroyed()) return { ok: false, why: "no-pageWC" };
-  const img = await pageWC.capturePage(); // no rect; grab visible
-  const { width: dipW, height: dipH } = img.getSize(); // DIP size
-  const dpr = await pageWC.executeJavaScript("window.devicePixelRatio||1");
-  const w = Math.round(dipW * dpr),
-    h = Math.round(dipH * dpr);
-  return { ok: w > 8 && h > 8, w, h, png: img.toPNG() };
+  if (!pageWC) return { ok: false };
+  const image = await pageWC.capturePage();
+  const { width: w, height: h } = image.getSize();
+  return { ok: true, png: image.toPNG(), w, h };
 });
-win?.on?.("focus", () => win.setIgnoreMouseEvents(false, { forward: true }));

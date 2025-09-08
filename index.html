@@ -69,8 +69,6 @@
 <canvas id="gl" style="position: fixed; inset: 0; z-index: 1"></canvas>
 
 <script>
-    window.orbAPI?.setIgnore(false);
-
     const dpr = Math.max(1, window.devicePixelRatio || 1);
     // index.html renderer
     const page = document.getElementById("page");
@@ -545,25 +543,26 @@
     }
 
     /* toggle OS passthrough ONLY when outside the orb union */
-    let osPassthrough = false;
-    function updateIgnoreAt(devX, devY) {
-        const kR = Math.max(1, K * Math.max(A.R, B.R));
-        const dA = Math.hypot(devX - A.cx, devY - A.cy) - A.R;
-        const dB = Math.hypot(devX - B.cx, devY - B.cy) - B.R;
-        const d = useB ? sminJS(dA, dB, kR) : dA;
-        const shouldIgnore = d > 0; // outside => ignore & send to OS
-        if (shouldIgnore !== osPassthrough) {
-            osPassthrough = shouldIgnore;
-            window.orbAPI?.setIgnore(shouldIgnore);
-        }
-        return d <= -1.0; // “confidently inside”
+    let overInteractive = false;
+
+    function updateInteractiveAt(devX, devY) {
+        const hud = document.getElementById("hud");
+        const r = hud.getBoundingClientRect();
+        const cssX = devX * (innerWidth / canvas.width);
+        const cssY = devY * (innerHeight / canvas.height);
+        const overHUD =
+            cssX >= r.left &&
+            cssX <= r.right &&
+            cssY >= r.top &&
+            cssY <= r.bottom;
+        return d <= -1.0 || overHUD; // “confidently inside”
     }
 
     /* single set of listeners (don’t register them inside other handlers) */
     canvas.addEventListener("mousemove", (e) => {
         const [dx, dy] = devXY(e);
-        const inside = updateIgnoreAt(dx, dy);
-        if (!inside) return;
+        overInteractive = updateInteractiveAt(dx, dy);
+        if (!overInteractive) return;
         const [sx, sy] = clickShiftDev([dx, dy]);
         window.orbAPI?.forwardInput({
             type: "mouseMove",
@@ -576,8 +575,8 @@
 
     canvas.addEventListener("mousedown", (e) => {
         const [dx, dy] = devXY(e);
-        const inside = updateIgnoreAt(dx, dy);
-        if (!inside) return;
+        overInteractive = updateInteractiveAt(dx, dy);
+        if (!overInteractive) return;
         const [sx, sy] = clickShiftDev([dx, dy]);
         const btn =
             e.button === 2 ? "right" : e.button === 1 ? "middle" : "left";
@@ -592,8 +591,8 @@
 
     canvas.addEventListener("mouseup", (e) => {
         const [dx, dy] = devXY(e);
-        const inside = updateIgnoreAt(dx, dy);
-        if (!inside) return;
+        overInteractive = updateInteractiveAt(dx, dy);
+        if (!overInteractive) return;
         const [sx, sy] = clickShiftDev([dx, dy]);
         const btn =
             e.button === 2 ? "right" : e.button === 1 ? "middle" : "left";
@@ -610,8 +609,8 @@
         "wheel",
         (e) => {
             const [dx, dy] = devXY(e);
-            const inside = updateIgnoreAt(dx, dy);
-            if (!inside) return;
+            overInteractive = updateInteractiveAt(dx, dy);
+            if (!overInteractive) return;
             const [sx, sy] = clickShiftDev([dx, dy]);
             window.orbAPI?.forwardInput({
                 type: "mouseWheel",
@@ -629,7 +628,7 @@
 
     /* focus + keys to the page (so inputs work) */
     addEventListener("keydown", (e) => {
-        if (osPassthrough) return; // if outside orb, don't steal keys
+        if (!overInteractive) return; // if outside orb, don't steal keys
         window.orbAPI?.forwardInput({
             type: "keyDown",
             keyCode: e.key,
@@ -644,7 +643,7 @@
             window.orbAPI?.forwardInput({ type: "char", keyCode: e.key });
     });
     addEventListener("keyup", (e) => {
-        if (osPassthrough) return;
+        if (!overInteractive) return;
         window.orbAPI?.forwardInput({ type: "keyUp", keyCode: e.key });
     });
 
