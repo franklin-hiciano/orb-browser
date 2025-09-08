@@ -1,6 +1,15 @@
 // main.js
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, webContents } from "electron"; // ESM only
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 let win;
+let pageWCid = null;
+ipcMain.handle("register-page", (_e, id) => {
+  pageWCid = id;
+  return true;
+});
 
 // OS passthrough: ignore mouse when *outside* the orbs
 ipcMain.on("set-ignore", (e, ignore) => {
@@ -11,25 +20,16 @@ ipcMain.on("set-ignore", (e, ignore) => {
 app.commandLine.appendSwitch("enable-transparent-visuals"); // Linux
 process.env.ELECTRON_OZONE_PLATFORM_HINT ||= "x11"; // or run with --ozone-platform-hint=x11
 app.whenReady().then(() => {
-  win = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    transparent: true,
-    frame: true, // frame:false if you want a frameless overlay
-    backgroundColor: "#00000000",
+  const win = new BrowserWindow({
     webPreferences: {
-      preload: new URL("./preload.cjs", import.meta.url).pathname,
-      webviewTag: true,
+      preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
-      offscreen: false,
+      sandbox: false,
     },
   });
-  win.loadFile("index.html");
-});
 
-ipcMain.handle("register-page", (_, id) => {
-  pageWCid = id;
+  win.loadFile("index.html");
 });
 
 ipcMain.handle("capture-page", async () => {
