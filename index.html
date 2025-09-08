@@ -55,11 +55,36 @@
     </div>
     <div>-/= feather · B toggle 2nd drop</div>
 </div>
-<webview id="page" src="about:blank"></webview>
+<webview
+    id="page"
+    style="
+        position: fixed;
+        inset: 0;
+        opacity: 0.02;
+        pointer-events: none;
+        will-change: opacity;
+        transform: translateZ(0);
+    "
+>
+</webview>
+
 <canvas id="gl"></canvas>
 <script>
     const dpr = Math.max(1, window.devicePixelRatio || 1);
+    // index.html renderer
     const page = document.getElementById("page");
+    // renderer, after you grab #page and #url
+    page.src = url.value; // load once at startup (not in dom-ready)
+    page.addEventListener("dom-ready", () => {
+        window.orbAPI.registerPage(page.getWebContentsId());
+    });
+    page.addEventListener("did-finish-load", () => {
+        grab();
+    }); // first snapshot
+    page.addEventListener("did-fail-load", (e) => {
+        if (e.errorCode !== -3)
+            console.error("webview load failed:", e.errorCode, e.validatedURL);
+    });
     const nav = document.getElementById("nav"),
         url = document.getElementById("url");
     nav.addEventListener("submit", (e) => {
@@ -67,9 +92,54 @@
         page.loadURL(url.value);
     });
 
-    page.addEventListener("dom-ready", () => {
-        window.orbAPI.registerPage(page.getWebContentsId());
-    });
+    // index.html (renderer script) — after you grab #page:
+    let zoom = 1;
+
+    // keep zoom in sync
+
+    function sendToWebview(type, e, xDev, yDev) {
+        const dpr = window.devicePixelRatio || 1;
+        const x = xDev / (dpr * zoom),
+            y = yDev / (dpr * zoom);
+        const x = xDev / (dpr * zoom);
+        const y = yDev / (dpr * zoom);
+        const button =
+            e?.button === 2 ? "right" : e?.button === 1 ? "middle" : "left";
+        if (type === "down")
+            page.sendInputEvent({
+                type: "mouseDown",
+                x,
+                y,
+                button,
+                clickCount: 1,
+            });
+        if (type === "up")
+            page.sendInputEvent({
+                type: "mouseUp",
+                x,
+                y,
+                button,
+                clickCount: 1,
+            });
+        if (type === "move")
+            page.sendInputEvent({
+                type: "mouseMove",
+                x,
+                y,
+                movementX: e.movementX,
+                movementY: e.movementY,
+            });
+        if (type === "wheel")
+            page.sendInputEvent({
+                type: "mouseWheel",
+                x,
+                y,
+                deltaX: e.deltaX,
+                deltaY: e.deltaY,
+                canScroll: true,
+                hasPreciseScrollingDeltas: true,
+            });
+    }
 
     const canvas = document.getElementById("gl");
     const gl = canvas.getContext("webgl2", {
@@ -79,6 +149,19 @@
     if (!gl) {
         alert("WebGL2 required");
     }
+    // premultipliedAlpha:true was already set; clear fully transparent
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    function updateIgnore(xDev, yDev) {
+        const kR = Math.max(1, K * Math.max(A.R, B.R));
+        const dA = Math.hypot(xDev - A.cx, yDev - A.cy) - A.R;
+        const dB = Math.hypot(xDev - B.cx, yDev - B.cy) - B.R;
+        const d = useB ? smin(dA, dB, kR) : dA;
+        window.orbAPI.setIgnore(d > 0); // OS passthrough when outside
+    }
+
+    console.log("tex size", texW, texH); // should become the page size
 
     const vs = `#version 300 es
 in vec2 a; void main(){gl_Position=vec4(a,0.,1.);} `;
@@ -132,22 +215,30 @@ void main(){
     float soft = smoothstep(0., uFeather, -d);
     o = vec4(pow(mix(base, base, soft), vec3(1./2.2)), 1.); return;
   }
+  // REMOVE this early block (it’s before R/F/T1 exist):
+  // bool texReady = ...
+  // vec3 baseR = sky(R);
+  // vec3 refrCol = texReady ? sampleImageAtPx(px + T1.xy * tBot) : baseR;
+  // vec3 lensCol = mix(refrCol, baseR, F);
 
-  // shading/refraction
+  // KEEP one block at the end, in this order:
   vec2 g2 = S.g; vec3 N = normalize(vec3(-g2, 1.));
   vec3 I = vec3(0,0,-1); if(dot(I,N)>0.) N = -N;
-  vec3 R = reflect(I,N); float F = fresnel(max(0.,dot(-I,N)), 1., uIOR);
+  vec3 R = reflect(I,N); float F = fresnel(max(0., dot(-I,N)), 1., uIOR);
   vec3 T1; bool ok = refractSafe(I,N,1.,uIOR,T1);
   float denom = min(-1e-6, T1.z);
-  float tBot = clamp(-h/denom, 0., 8.*max(1.,h));
-  vec3 lensCol = mix(sampleImageAtPx(px + T1.xy*tBot), sky(R), F);
+  float tBot  = clamp(-h/denom, 0., 8.*max(1.,h));
+  bool texReady = (uTexSize.x > 8. && uTexSize.y > 8.);
+  vec3 refrCol = texReady ? sampleImageAtPx(px + T1.xy*tBot) : sky(R);
+  vec3 lensCol = mix(refrCol, sky(R), F);
 
-  // feathered mix to background
   float soft = smoothstep(0., uFeather, -d);
   float thickness = clamp(h / max(max(uDropA.w, uDropB.w), 1e-6), 0., 1.);
   float w = clamp(soft * (0.4 + 0.6*thickness), 0., 1.);
-  vec3 outCol = mix(base, lensCol, w);
-  o = vec4(pow(max(outCol,0.), vec3(1./2.2)), 1.);
+  vec3 outCol = mix(vec3(0.), lensCol, w);
+  o = vec4(outCol, w);
+                   // alpha = w (premultiplied by browser)
+
 }`;
     function sh(t, s) {
         const o = gl.createShader(t);
@@ -195,6 +286,10 @@ void main(){
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.uniform1i(uTex, 0);
 
+    page.addEventListener("did-finish-load", () => {
+        grab();
+    }); // first bitmap
+
     let texW = 2,
         texH = 2;
     // state
@@ -213,9 +308,7 @@ void main(){
         capBusy = true;
         const r = await window.orbAPI.capturePage();
         if (r && r.ok) {
-            const img = new Image();
-            img.src = URL.createObjectURL(new Blob([r.png]));
-            await img.decode();
+            const bmp = await createImageBitmap(new Blob([r.png]));
             texW = r.w;
             texH = r.h;
             gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -226,9 +319,8 @@ void main(){
                 gl.RGBA,
                 gl.RGBA,
                 gl.UNSIGNED_BYTE,
-                img,
+                bmp,
             );
-            URL.revokeObjectURL(img.src);
         }
         capBusy = false;
     }
@@ -243,6 +335,24 @@ void main(){
     }
     addEventListener("resize", resize);
     resize();
+    function recenterIfOffscreen() {
+        const inside = (D) =>
+            D.cx > 0 && D.cx < canvas.width && D.cy > 0 && D.cy < canvas.height;
+        if (!inside(A)) {
+            A.cx = canvas.width * 0.45;
+            A.cy = canvas.height * 0.5;
+        }
+        if (!inside(B)) {
+            B.cx = canvas.width * 0.65;
+            B.cy = canvas.height * 0.52;
+        }
+    }
+    addEventListener("resize", () => {
+        resize();
+        recenterIfOffscreen();
+    });
+    recenterIfOffscreen();
+    setInterval(() => console.log("captured tex size:", texW, texH), 1000);
 
     // input (drag A, Ctrl+drag B; wheel adjusts R/H/IOR)
     let dragging = false,
@@ -304,10 +414,60 @@ void main(){
         const x = (e.clientX - r.left) * (canvas.width / r.width);
         const y = (e.clientY - r.top) * (canvas.height / r.height);
         // test against union mask (same smin as shader)
+        // hit-test (same smin as shader)
         function smin(a, b, k) {
             const t = Math.max(0, Math.min(1, 0.5 + (0.5 * (b - a)) / k));
             return (1 - t) * b + t * a - k * t * (1 - t);
         }
+
+        let osPassthrough = false;
+        function updateIgnore(xDev, yDev) {
+            const kR = Math.max(1, K * Math.max(A.R, B.R)); // same K you use in shader
+            const dA = Math.hypot(xDev - A.cx, yDev - A.cy) - A.R;
+            const dB = Math.hypot(xDev - B.cx, yDev - B.cy) - B.R;
+            const d = useB ? smin(dA, dB, kR) : dA;
+            const shouldIgnore = d > 0; // outside union => pass to OS
+            if (shouldIgnore !== osPassthrough) {
+                osPassthrough = shouldIgnore;
+                window.orbAPI.setIgnore(shouldIgnore);
+            }
+        }
+
+        // pointer handlers
+        const canvas = document.getElementById("gl");
+        function devXY(e) {
+            const r = canvas.getBoundingClientRect();
+            return [
+                (e.clientX - r.left) * (canvas.width / r.width),
+                (e.clientY - r.top) * (canvas.height / r.height),
+            ];
+        }
+
+        canvas.addEventListener("mousemove", (e) => {
+            const [x, y] = devXY(e);
+            updateIgnore(x, y);
+            if (!osPassthrough) sendToWebview("move", e, x, y);
+        });
+        canvas.addEventListener("mousedown", (e) => {
+            const [x, y] = devXY(e);
+            updateIgnore(x, y);
+            if (!osPassthrough) sendToWebview("down", e, x, y);
+        });
+        canvas.addEventListener("mouseup", (e) => {
+            const [x, y] = devXY(e);
+            updateIgnore(x, y);
+            if (!osPassthrough) sendToWebview("up", e, x, y);
+        });
+        canvas.addEventListener(
+            "wheel",
+            (e) => {
+                const [x, y] = devXY(e);
+                updateIgnore(x, y);
+                if (!osPassthrough) sendToWebview("wheel", e, x, y);
+            },
+            { passive: true },
+        );
+
         const kR = Math.max(1, K * Math.max(A.R, B.R));
         const dA = Math.hypot(x - A.cx, y - A.cy) - A.R;
         const dB = Math.hypot(x - B.cx, y - B.cy) - B.R;

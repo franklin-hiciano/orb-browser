@@ -1,7 +1,15 @@
-import { app, BrowserWindow, ipcMain, webContents } from "electron";
-let win,
-  pageWCid = null;
+// main.js
+import { app, BrowserWindow, ipcMain } from "electron";
+let win;
 
+// OS passthrough: ignore mouse when *outside* the orbs
+ipcMain.on("set-ignore", (e, ignore) => {
+  const bw = BrowserWindow.fromWebContents(e.sender); // <-- get the right window
+  if (!bw || bw.isDestroyed()) return;
+  bw.setIgnoreMouseEvents(Boolean(ignore), { forward: true });
+});
+app.commandLine.appendSwitch("enable-transparent-visuals"); // Linux
+process.env.ELECTRON_OZONE_PLATFORM_HINT ||= "x11"; // or run with --ozone-platform-hint=x11
 app.whenReady().then(() => {
   win = new BrowserWindow({
     width: 1200,
@@ -38,5 +46,4 @@ ipcMain.handle("forward-input", (_, ev) => {
 });
 
 // main.js
-win.setIgnoreMouseEvents(true, { forward: true });
 // then toggle to false via IPC while cursor is inside an orb.
