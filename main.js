@@ -50,3 +50,4 @@ ipcMain.handle("orb:capture", async () => {
     h = Math.round(dipH * dpr);
   return { ok: w > 8 && h > 8, w, h, png: img.toPNG() };
 });
+win?.on?.("focus", () => win.setIgnoreMouseEvents(false, { forward: true }));

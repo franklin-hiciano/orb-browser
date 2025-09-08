@@ -69,6 +69,8 @@
 <canvas id="gl" style="position: fixed; inset: 0; z-index: 1"></canvas>
 
 <script>
+    window.orbAPI?.setIgnore(false);
+
     const dpr = Math.max(1, window.devicePixelRatio || 1);
     // index.html renderer
     const page = document.getElementById("page");
@@ -139,6 +141,18 @@
     if (!gl) {
         alert("WebGL2 required");
     }
+
+    // fallback: if we're currently ignoring, a window-level mousemove can flip us back
+    addEventListener(
+        "mousemove",
+        (e) => {
+            if (!osPassthrough) return;
+            const [dx, dy] = devXY(e);
+            updateIgnoreAt(dx, dy); // will call setIgnore(false) when you move into the orb
+        },
+        { passive: true },
+    );
+
     // premultipliedAlpha:true was already set; clear fully transparent
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
