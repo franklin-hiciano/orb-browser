@@ -1,5 +1,5 @@
 // main.js
-import { app, BrowserWindow, ipcMain, webContents } from "electron"; // ESM only
+import { app, BrowserWindow, ipcMain, webContents } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
@@ -26,6 +26,7 @@ app.whenReady().then(() => {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      webviewTag: true, // ← add this
     },
   });
 
@@ -35,9 +36,10 @@ app.whenReady().then(() => {
 ipcMain.handle("capture-page", async () => {
   if (!pageWCid) return { ok: false };
   const wc = webContents.fromId(pageWCid);
-  const img = await wc.capturePage(); // visible area @ device scale
-  const { width, height } = img.getSize();
-  return { ok: true, png: img.toPNG(), w: width, h: height };
+  const img = await wc.capturePage();
+  const png = img.toPNG();
+  const { width: w, height: h } = img.getSize();
+  return { ok: true, png, w, h };
 });
 
 ipcMain.handle("forward-input", (_, ev) => {
